@@ -1,21 +1,21 @@
 import xml.etree.ElementTree as ET
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from ctransformers import AutoModelForCausalLM
 import json
 from typing import Dict, List, Any
-import torch
 from pathlib import Path
+import os
 
 class NintexToPowerAutomate:
-    def __init__(self, model_name: str):
+    def __init__(self, model_path: str):
         """
-        Inicializa el procesador con un modelo de Hugging Face
+        Inicializa el procesador con el modelo local
         """
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            device_map="auto",
-            torch_dtype=torch.float16,
-            low_cpu_mem_usage=True
+        self.llm = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            model_type="mistral",
+            context_length=2048,
+            max_new_tokens=512,
+            temperature=0.1
         )
         self.action_tree = {}
         self.processed_actions = {}
@@ -24,19 +24,12 @@ class NintexToPowerAutomate:
         """
         Genera una respuesta usando el modelo
         """
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
-        
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                max_length=512,
-                num_return_sequences=1,
-                temperature=0.1,
-                do_sample=True,
-                pad_token_id=self.tokenizer.eos_token_id
-            )
-        
-        response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        response = self.llm(
+            prompt,
+            max_new_tokens=512,
+            temperature=0.1,
+            stop=["}"]  # Para asegurar que el JSON se complete correctamente
+        )
         return response.strip()
 
     def load_workflow(self, xml_path: str) -> ET.Element:
@@ -69,20 +62,22 @@ class NintexToPowerAutomate:
         """
         prompt = f"""
         Analiza esta acción de Nintex Workflow y genera su equivalente en Power Automate.
-        Acción: {json.dumps(action_data, indent=2)}
         Genera solo el JSON de la acción equivalente en Power Automate.
+        
+        Acción Nintex:
+        {json.dumps(action_data, indent=2)}
+        
+        Respuesta en formato JSON:
+        {{
         """
 
         try:
             response = self.generate_response(prompt)
-            # Extraer solo la parte JSON de la respuesta
-            json_start = response.find('{')
-            json_end = response.rfind('}') + 1
-            if json_start >= 0 and json_end > 0:
-                json_response = response[json_start:json_end]
-                power_automate_action = json.loads(json_response)
-            else:
-                raise json.JSONDecodeError("No JSON found", response, 0)
+            # Asegurarse de que tenemos un JSON válido
+            json_str = "{" + response.split("{", 1)[-1]
+            if not json_str.endswith("}"):
+                json_str += "}"
+            power_automate_action = json.loads(json_str)
                 
         except (json.JSONDecodeError, Exception) as e:
             power_automate_action = {
@@ -107,9 +102,13 @@ class NintexToPowerAutomate:
         """
         Construye el árbol de acciones y procesa cada una
         """
+        print("Iniciando procesamiento del árbol de acciones...")
+        
         for action in root.findall('.//NWActionConfig'):
             action_id = action.get('id', '')
             parent_id = self.find_parent_action(action)
+            
+            print(f"Procesando acción: {action_id}")
             
             # Extraer y procesar la acción
             action_data = self.extract_action_properties(action)
@@ -126,6 +125,8 @@ class NintexToPowerAutomate:
                 'id': action_id,
                 'action': processed_action
             })
+            
+            print(f"Acción {action_id} procesada correctamente")
 
         return self.action_tree
 
@@ -133,6 +134,7 @@ class NintexToPowerAutomate:
         """
         Procesa el workflow completo y genera la traducción
         """
+        print(f"Iniciando procesamiento del workflow: {xml_path}")
         root = self.load_workflow(xml_path)
         action_tree = self.build_action_tree(root)
         
@@ -145,17 +147,24 @@ class NintexToPowerAutomate:
         """
         Guarda los resultados en un archivo JSON
         """
+        print(f"Guardando resultados en: {output_path}")
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
+        print("Resultados guardados correctamente")
 
 def main():
-    # Configuración
-    MODEL_NAME = "meta-llama/Llama-2-7b"  # o el modelo que prefieras
-    INPUT_XML = "ruta/al/workflow.xml"
-    OUTPUT_JSON = "resultado_workflow.json"
+    # Obtener la ruta absoluta al directorio del script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Configurar rutas
+    MODEL_PATH = os.path.join(script_dir, "mistral-7b-v0.1.Q4_K_M.gguf")
+    INPUT_XML = os.path.join(script_dir, "workflow.xml")
+    OUTPUT_JSON = os.path.join(script_dir, "resultado_workflow.json")
 
+    print(f"Usando modelo en: {MODEL_PATH}")
+    
     # Procesar el workflow
-    processor = NintexToPowerAutomate(MODEL_NAME)
+    processor = NintexToPowerAutomate(MODEL_PATH)
     results = processor.process_workflow(INPUT_XML)
     processor.save_results(results, OUTPUT_JSON)
 
