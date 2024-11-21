@@ -1,219 +1,144 @@
 import xml.etree.ElementTree as ET
-from typing import Dict, List, Tuple
-import csv
+from llama_cpp import Llama
+import json
+from typing import Dict, List, Any
+import numpy as np
+from pathlib import Path
 
 
-class NintexPromptGenerator:
-    def __init__(self, xml_file_path: str):
-        with open(xml_file_path, 'r', encoding='utf-8') as file:
-            self.xml_content = file.read()
-        self.prompts_by_activity = {
-            'AssignVariable': self._generate_variable_prompt,
-            'SendEmail': self._generate_email_prompt,
-            'FlexibleTask': self._generate_task_prompt,
-            'IfElse': self._generate_condition_prompt,
-            'UpdateItemMetadata': self._generate_metadata_prompt,
-            'CheckIn': self._generate_checkin_prompt,
-            'CreateListItem': self._generate_list_item_prompt
+class NintexToPowerAutomate:
+    def __init__(self, model_path: str):
+        """
+        Inicializa el procesador con un modelo LLM local
+        """
+        self.llm = Llama(
+            model_path=model_path,
+            n_ctx=2048,
+            n_threads=8,
+            embedding=True
+        )
+        self.action_tree = {}
+        self.processed_actions = {}
+
+    def load_workflow(self, xml_path: str) -> ET.Element:
+        """
+        Carga el archivo XML del workflow
+        """
+        tree = ET.parse(xml_path)
+        return tree.getroot()
+
+    def extract_action_properties(self, action: ET.Element) -> Dict[str, Any]:
+        """
+        Extrae todas las propiedades de una acción NWActionConfig
+        """
+        properties = {}
+        for prop in action.findall('.//property'):
+            prop_name = prop.get('name', '')
+            prop_value = prop.text or ''
+            properties[prop_name] = prop_value
+
+        return {
+            'id': action.get('id', ''),
+            'name': action.get('name', ''),
+            'type': action.get('type', ''),
+            'properties': properties
         }
 
-    def _activity_to_xml(self, activity: ET.Element) -> str:
-        return ET.tostring(activity, encoding='unicode', method='xml')
-
-    def generate_individual_prompts(self) -> List[Dict]:
-        root = ET.fromstring(self.xml_content)
-        ns = {'nw': 'http://schemas.nintex.com/workflow/2010'}
-        activities = []
-
-        for idx, activity in enumerate(root.findall('.//nw:Activity', ns)):
-            activity_type = activity.get('Type')
-            description = activity.get('Description', '')
-            properties = self._extract_properties(activity)
-            xml_content = self._activity_to_xml(activity)
-
-            if activity_type in self.prompts_by_activity:
-                prompt = self.prompts_by_activity[activity_type](properties, xml_content)
-                activities.append({
-                    'id': f'activity_{idx}',
-                    'type': activity_type,
-                    'description': description,
-                    'properties': properties,
-                    'xml': xml_content,
-                    'prompt': prompt
-                })
-
-        return activities
-
-    def _extract_properties(self, activity: ET.Element) -> Dict:
-        properties = {}
-        for prop in activity.findall('.//Property'):
-            name = prop.get('Name', '')
-            value = prop.text or ''
-            properties[name] = value
-        return properties
-
-    def _generate_variable_prompt(self, props: Dict, xml: str) -> str:
-        return f"""
-        Convierte esta actividad de asignación de variable de Nintex a Power Automate:
-
-        XML de la actividad:
-        {xml}
-
-        Detalles:
-        Variable: {props.get('VariableName')}
-        Valor: {props.get('Value')}
-
-        Requisitos:
-        1. Usar Initialize variable o Set variable según corresponda
-        2. Mantener el tipo de dato original
-        3. Generar un JSON válido para importar en Power Automate
-        4. Usar la sintaxis correcta para referencias dinámicas
+    def process_single_action(self, action_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Procesa una única acción usando el modelo LLM
+        """
+        prompt = f"""
+        Analiza esta acción de Nintex Workflow y genera su equivalente en Power Automate.
+        Acción: {json.dumps(action_data, indent=2)}
+        Genera solo el JSON de la acción equivalente en Power Automate.
         """
 
-    def _generate_email_prompt(self, props: Dict, xml: str) -> str:
-        return f"""
-        Convierte esta actividad de envío de correo de Nintex a Power Automate:
+        response = self.llm.create_completion(
+            prompt=prompt,
+            max_tokens=512,
+            temperature=0.1,
+            stop=["}"]
+        )
 
-        XML de la actividad:
-        {xml}
+        try:
+            power_automate_action = json.loads(response['choices'][0]['text'] + "}")
+        except json.JSONDecodeError:
+            power_automate_action = {
+                "error": "No se pudo generar una traducción válida",
+                "original_action": action_data
+            }
 
-        Detalles:
-        Para: {props.get('To')}
-        Asunto: {props.get('Subject')}
-        Cuerpo: {props.get('Body')}
+        return power_automate_action
 
-        Requisitos:
-        1. Usar el conector Office 365 Outlook
-        2. Mantener el formato HTML si existe
-        3. Generar un JSON válido para importar en Power Automate
-        4. Incluir manejo de adjuntos si existen
+    def find_parent_action(self, action: ET.Element) -> str:
         """
-
-    def _generate_task_prompt(self, props: Dict, xml: str) -> str:
-        return f"""
-        Convierte esta tarea de aprobación de Nintex a Power Automate:
-
-        XML de la actividad:
-        {xml}
-
-        Detalles:
-        Asignado a: {props.get('AssignTo')}
-        Fecha límite: {props.get('DueDate')}
-
-        Requisitos:
-        1. Usar el conector de Aprobaciones moderno
-        2. Configurar el tiempo de espera
-        3. Generar un JSON válido para importar en Power Automate
-        4. Incluir manejo de respuestas múltiples
+        Encuentra el ID del padre de una acción
         """
+        parent = action.getparent()
+        while parent is not None:
+            if parent.tag == 'NWActionConfig':
+                return parent.get('id', '')
+            parent = parent.getparent()
+        return 'root'
 
-    def _generate_condition_prompt(self, props: Dict, xml: str) -> str:
-        return f"""
-        Convierte esta condición de Nintex a Power Automate:
-
-        XML de la actividad:
-        {xml}
-
-        Detalles:
-        Condición: {props.get('Condition')}
-
-        Requisitos:
-        1. Usar Condition o Switch según corresponda
-        2. Mantener la lógica exacta de evaluación
-        3. Generar un JSON válido para importar en Power Automate
+    def build_action_tree(self, root: ET.Element) -> Dict[str, List[Dict[str, Any]]]:
         """
-
-    def _generate_metadata_prompt(self, props: Dict, xml: str) -> str:
-        return f"""
-        Convierte esta actividad de actualización de metadatos de Nintex a Power Automate:
-
-        XML de la actividad:
-        {xml}
-
-        Detalles:
-        Estado: {props.get('Status')}
-
-        Requisitos:
-        1. Usar el conector de SharePoint
-        2. Actualizar los metadatos del elemento
-        3. Generar un JSON válido para importar en Power Automate
+        Construye el árbol de acciones y procesa cada una
         """
+        for action in root.findall('.//NWActionConfig'):
+            action_id = action.get('id', '')
+            parent_id = self.find_parent_action(action)
 
-    def _generate_checkin_prompt(self, props: Dict, xml: str) -> str:
-        return f"""
-        Convierte esta actividad de Check-in de Nintex a Power Automate:
+            # Extraer y procesar la acción
+            action_data = self.extract_action_properties(action)
+            processed_action = self.process_single_action(action_data)
 
-        XML de la actividad:
-        {xml}
+            # Almacenar la acción procesada
+            self.processed_actions[action_id] = processed_action
 
-        Detalles:
-        Comentarios: {props.get('Comments')}
+            # Construir el árbol
+            if parent_id not in self.action_tree:
+                self.action_tree[parent_id] = []
 
-        Requisitos:
-        1. Usar el conector de SharePoint
-        2. Realizar el check-in del documento
-        3. Generar un JSON válido para importar en Power Automate
+            self.action_tree[parent_id].append({
+                'id': action_id,
+                'action': processed_action
+            })
+
+        return self.action_tree
+
+    def process_workflow(self, xml_path: str) -> Dict[str, Any]:
         """
-
-    def _generate_list_item_prompt(self, props: Dict, xml: str) -> str:
-        return f"""
-        Convierte esta actividad de creación de elemento de lista de Nintex a Power Automate:
-
-        XML de la actividad:
-        {xml}
-
-        Detalles:
-        Lista: {props.get('ListName')}
-
-        Requisitos:
-        1. Usar el conector de SharePoint
-        2. Crear el elemento en la lista especificada
-        3. Generar un JSON válido para importar en Power Automate
+        Procesa el workflow completo y genera la traducción
         """
+        root = self.load_workflow(xml_path)
+        action_tree = self.build_action_tree(root)
 
-    def save_prompts_to_csv(self, activities: List[Dict], output_file: str):
-        with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
-            fieldnames = ['id', 'type', 'description', 'xml', 'prompt']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        return {
+            'workflow_tree': action_tree,
+            'processed_actions': self.processed_actions
+        }
 
-            writer.writeheader()
-            for activity in activities:
-                writer.writerow({
-                    'id': activity['id'],
-                    'type': activity['type'],
-                    'description': activity['description'],
-                    'xml': activity['xml'],
-                    'prompt': activity['prompt']
-                })
+    def save_results(self, results: Dict[str, Any], output_path: str):
+        """
+        Guarda los resultados en un archivo JSON
+        """
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(results, f, indent=2, ensure_ascii=False)
+
+
+def main():
+    # Configuración
+    MODEL_PATH = "llama-2-7b.Q4_K_M.gguf"
+    INPUT_XML = "workflow_nintex.xml"
+    OUTPUT_JSON = "resultado_workflow.json"
+
+    # Procesar el workflow
+    processor = NintexToPowerAutomate(MODEL_PATH)
+    results = processor.process_workflow(INPUT_XML)
+    processor.save_results(results, OUTPUT_JSON)
 
 
 if __name__ == "__main__":
-    # Ruta al archivo XML de Nintex
-    xml_file_path = "workflow_nintex.xml"
-
-    try:
-        # Crear instancia del generador de prompts
-        generator = NintexPromptGenerator(xml_file_path)
-
-        # Generar los prompts
-        activities = generator.generate_individual_prompts()
-
-        # Guardar en CSV
-        generator.save_prompts_to_csv(activities, "output_prompts.csv")
-
-        # Procesar cada actividad individualmente
-        for activity in activities:
-            print(f"\n--- Actividad: {activity['id']} ---")
-            print(f"Tipo: {activity['type']}")
-            print(f"Descripción: {activity['description']}")
-            print("XML de la actividad:")
-            print(activity['xml'])
-            print("Prompt para LLM:")
-            print(activity['prompt'])
-
-    except FileNotFoundError:
-        print(f"Error: No se encontró el archivo XML en la ruta: {xml_file_path}")
-    except ET.ParseError as e:
-        print(f"Error al parsear el XML: {e}")
-    except Exception as e:
-        print(f"Error inesperado: {e}")
+    main()
