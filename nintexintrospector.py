@@ -1,4 +1,3 @@
-
 import xml.etree.ElementTree as ET
 from ctransformers import AutoModelForCausalLM
 import json
