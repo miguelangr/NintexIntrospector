@@ -1,0 +1,52 @@
+[P1]: La arquitectura propuesta se desvía del enfoque monolítico tradicional.
+    + Según "Microservices Patterns" (Chris Richardson, 2018), esto es beneficioso para la modernización.
+    + El "Connect MS" ya está en producción, probando la viabilidad.
+    + Martin Fowler en "The Strangler Fig Pattern" (2004) respalda este enfoque de migración gradual.
+
+[P2]: La gestión de sesiones presenta desafíos críticos.
+    + "Designing Data-Intensive Applications" (Kleppmann, 2017) advierte sobre los riesgos de session affinity.
+    + La pérdida de un pod puede resultar en pérdida de tokens de sesión.
+    + El balanceo de carga se ve comprometido con session affinity.
+
+[C1]: Por lo tanto, se requiere una solución de sesiones distribuida.
+
+[P3]: La seguridad en la DMZ es fundamental.
+    + "Building Microservices" (Sam Newman, 2021) enfatiza la seguridad por capas.
+    + La autenticación debe ocurrir antes de acceder a la red de base de datos.
+    + El enfoque actual de "solo proxy" amplía la superficie de ataque.
+
+[P4]: La arquitectura de microservicios ofrece ventajas sobre session affinity.
+    + Permite escalado independiente de componentes.
+    + Facilita el desarrollo y despliegue por equipos autónomos.
+    + "Production-Ready Microservices" (Fowler, 2016) respalda este enfoque.
+
+[P5]: La gestión de tokens y sesiones debe ser robusta.
+    + "OAuth 2.0 in Action" (Richer, 2017) recomienda no almacenar información sensible en JWTs.
+    + La rotación de identificadores de sesión es una mejor práctica.
+    + Se necesita sincronización entre Hazelcast y sesiones Java.
+
+[C2]: La arquitectura propuesta necesita:
+    + Sistema de cache distribuido (Redis Enterprise, 2023).
+    + Gestión de sesiones sin estado cuando sea posible.
+    + Observabilidad end-to-end (OpenTelemetry, 2023).
+
+[P6]: Los BFFs mejoran la eficiencia y mantenibilidad.
+    + Permiten optimizaciones específicas para el cliente móvil.
+    + Reducen la complejidad en el frontend.
+    + Netflix Tech Blog (2020) reporta mejoras significativas de rendimiento.
+
+[C3]: La implementación debe priorizar:
+    + Patrones de resiliencia ("Release It!", Nygard, 2018).
+    + Circuit breakers para manejar fallos.
+    + Monitoreo distribuido.
+
+[P7]: La escalabilidad horizontal es crítica.
+    + La session affinity limita la escalabilidad real.
+    + "Fundamentals of Software Architecture" (Richards & Ford, 2020) enfatiza diseño para escala.
+    + AWS Well-Architected Framework (2023) recomienda evitar estado en los servicios.
+
+[C4]: Por lo tanto, la arquitectura propuesta es superior si:
+    + Implementa gestión de sesiones distribuida.
+    + Establece autenticación robusta en DMZ.
+    + Mantiene observabilidad completa.
+    + Evita los problemas de session affinity.
